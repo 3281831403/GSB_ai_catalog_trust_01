@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Agent-Card/ai-catalog-go/catalog"
+	"github.com/Agent-Card/ai-catalog-go/trust"
 )
 
 // ConformanceLevel is the AI Catalog conformance level a document satisfies.
@@ -164,10 +165,22 @@ func (v *validator) validateCatalog(c *catalog.AICatalog, path string, depth int
 	v.validateHost(c.Host, path+".host")
 	v.validateExtensionKeys(c.Extensions, path+".extensions")
 	v.validateEntryUniqueness(c.Entries, path)
+	v.validateCatalogSignature(c.Signature, path+".signature")
 
 	for i := range c.Entries {
 		v.validateEntry(&c.Entries[i], fmt.Sprintf("%s.entries[%d]", path, i), depth)
 	}
+}
+
+// validateCatalogSignature applies the same algorithm rules as the trust
+// analysis package to the document's own detached JWS. The rule itself lives
+// in the trust package and must not be duplicated here.
+func (v *validator) validateCatalogSignature(signature, path string) {
+	if signature == "" {
+		return
+	}
+
+	v.validateSignatureAlgorithm(signature, path)
 }
 
 // validateHost enforces the required Host Info members: displayName, and the
@@ -320,8 +333,26 @@ func (v *validator) validateTrustManifest(manifest *catalog.TrustManifest, path 
 	}
 
 	v.validateSignedManifestMembers(manifest, path)
+	v.validateSignatureAlgorithm(manifest.Signature, path+".signature")
 	v.validateManifestTimestamps(manifest, path)
 	v.validateSubject(manifest.Subject, path+".subject")
+}
+
+// validateSignatureAlgorithm rejects the algorithms that cannot establish
+// third-party trust ("none" and the symmetric HMAC family), reusing the single
+// rule definition in the trust package so validation and trust analysis can
+// never disagree about which algorithms are allowed.
+func (v *validator) validateSignatureAlgorithm(signature, path string) {
+	algorithm, ok := trust.JWSAlgorithm(signature)
+	if !ok {
+		return
+	}
+
+	if trust.IsForbiddenJWSAlgorithm(algorithm) {
+		v.addError(path, fmt.Sprintf(
+			"signature algorithm '%s' must be rejected; a trust manifest requires an asymmetric signature",
+			algorithm))
+	}
 }
 
 // isSubstantive reports whether a manifest carries verifiable trust evidence.
@@ -392,6 +423,14 @@ func (v *validator) validateSubject(subject *catalog.Subject, path string) {
 
 	if subject.Digest == "" {
 		v.addError(path+".digest", "subject.digest is required and must not be empty")
+
+		return
+	}
+
+	// Digest policy (accepted algorithms and the SHA-256 minimum) is defined
+	// once by trust.ParseDigest and shared with trust analysis.
+	if _, err := trust.ParseDigest(subject.Digest); err != nil {
+		v.addError(path+".digest", err.Error())
 	}
 }
 

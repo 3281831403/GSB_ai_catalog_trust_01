@@ -4,7 +4,10 @@
 
 package catalog
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // HostInfo identifies the operator of an AI Catalog.
 type HostInfo struct {
@@ -69,6 +72,60 @@ type TrustManifest struct {
 	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
 }
 
+// MarshalJSON preserves explicitly present empty array members.
+//
+// json.Unmarshal turns a present "attestations": [] into a non-nil slice of
+// length zero, while a missing member leaves the field nil. encoding/json's
+// "omitempty" treats both as absent, which drops a present-but-empty key. A
+// producer signing the original bytes and a verifier canonicalizing this
+// struct would then commit to different payloads. Marshaling through pointer
+// slices lets omitempty distinguish nil (omit the member) from a non-nil empty
+// slice (emit []).
+func (m TrustManifest) MarshalJSON() ([]byte, error) {
+	type proxy struct {
+		Identity          string                     `json:"identity"`
+		IdentityType      string                     `json:"identityType,omitempty"`
+		TrustSchema       *TrustSchema               `json:"trustSchema,omitempty"`
+		Attestations      *[]Attestation             `json:"attestations,omitempty"`
+		Provenance        *[]ProvenanceLink          `json:"provenance,omitempty"`
+		PrivacyPolicyURL  string                     `json:"privacyPolicyUrl,omitempty"`
+		TermsOfServiceURL string                     `json:"termsOfServiceUrl,omitempty"`
+		Subject           *Subject                   `json:"subject,omitempty"`
+		IssuedAt          string                     `json:"issuedAt,omitempty"`
+		ExpiresAt         string                     `json:"expiresAt,omitempty"`
+		Signature         string                     `json:"signature,omitempty"`
+		Extensions        map[string]json.RawMessage `json:"extensions,omitempty"`
+	}
+
+	out := proxy{
+		Identity:          m.Identity,
+		IdentityType:      m.IdentityType,
+		TrustSchema:       m.TrustSchema,
+		PrivacyPolicyURL:  m.PrivacyPolicyURL,
+		TermsOfServiceURL: m.TermsOfServiceURL,
+		Subject:           m.Subject,
+		IssuedAt:          m.IssuedAt,
+		ExpiresAt:         m.ExpiresAt,
+		Signature:         m.Signature,
+		Extensions:        m.Extensions,
+	}
+
+	if m.Attestations != nil {
+		out.Attestations = &m.Attestations
+	}
+
+	if m.Provenance != nil {
+		out.Provenance = &m.Provenance
+	}
+
+	data, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("marshal trust manifest: %w", err)
+	}
+
+	return data, nil
+}
+
 // Subject binds a TrustManifest to the artifact it describes, so a signature
 // cannot be replayed onto different content.
 type Subject struct {
@@ -90,6 +147,36 @@ type TrustSchema struct {
 	Version             string   `json:"version"`
 	GovernanceURI       string   `json:"governanceUri,omitempty"`
 	VerificationMethods []string `json:"verificationMethods,omitempty"`
+}
+
+// MarshalJSON preserves an explicitly present, empty "verificationMethods"
+// member for the same signing-payload fidelity reasons as
+// TrustManifest.MarshalJSON: nil omits the member, a non-nil empty slice
+// serializes as [].
+func (s TrustSchema) MarshalJSON() ([]byte, error) {
+	type proxy struct {
+		Identifier          string    `json:"identifier"`
+		Version             string    `json:"version"`
+		GovernanceURI       string    `json:"governanceUri,omitempty"`
+		VerificationMethods *[]string `json:"verificationMethods,omitempty"`
+	}
+
+	out := proxy{
+		Identifier:    s.Identifier,
+		Version:       s.Version,
+		GovernanceURI: s.GovernanceURI,
+	}
+
+	if s.VerificationMethods != nil {
+		out.VerificationMethods = &s.VerificationMethods
+	}
+
+	data, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("marshal trust schema: %w", err)
+	}
+
+	return data, nil
 }
 
 // Attestation is verifiable proof of a claim about an artifact (compliance
